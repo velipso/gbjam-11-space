@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>GBJam 11 - Space</title>
+  <style>
+
+html, body {
+  background-color: #000;
+  font-family: sans-serif;
+  font-size: 18px;
+  line-height: 24px;
+  color: #ddd;
+  text-align: center;
+}
+
+a {
+  color: #dd7;
+  text-decoration: none;
+}
+
+a:hover, a:active {
+  color: #ff7;
+  text-decoration: underline;
+}
+
+#cnv {
+  display: block;
+  width: 640px;
+  height: 576px;
+  margin: 16px auto;
+  image-rendering: pixelated;
+  border: 1px solid #222;
+  border-radius: 8px;
+}
+
+
+#controls {
+  text-align: left;
+  width: 275px;
+  margin: 16px auto;
+  padding: 16px;
+  background-color: #222;
+  border-radius: 8px;
+}
+
+#controls > p {
+  margin: 0 0 8px 0;
+  padding: 0;
+  font-weight: bold;
+  text-decoration: underline;
+  text-align: center;
+}
+
+#controls > strong {
+  display: inline-block;
+  width: 120px;
+}
+
+#fps {
+  color: #555;
+}
+  </style>
+</head>
+<body>
+  <canvas id="cnv" width="160" height="144"></canvas>
+  <div id="controls">
+    <p>Controls</p>
+    <strong>Arrow Keys</strong> Move</br >
+    <strong>Z</strong> Pick up / put down<br />
+    <strong>X</strong> Jump
+  </div>
+  <p id="fps">FPS: ?</p>
+  <p>
+    &copy; Copyright 2023 <a href="https://pulp.biz">Pocket Pulp LLC</a>, 0BSD
+  </p>
+  <script>
+const fps = document.getElementById('fps');
+const cnv = document.getElementById('cnv');
+const ctx = cnv.getContext('2d');
+const world = [];
+const cameraLag = 0.11;
+const physicsAirDrag = 0.85;
+const physicsGroundDrag = 0.8;
+const physicsGravityDrag = 0.98;
+const physicsMove = 0.5;
+const physicsGravity = 0.3;
+const physicsJump = -6;
+const grabFrames = 10;
+const placeFrames = 6;
+const epsilon = 0.0001;
+let worldWidth = 0;
+let worldHeight = 0;
+let userX = 0;
+let userY = 0;
+let forceX = 0;
+let forceY = 0;
+let velX = 0;
+let velY = 0;
+let grounded = false;
+let groundedPos = [0, 0];
+let grabItem = 0;
+let pushed = false;
+let grabbing = 0;
+let grabDir = 0;
+let placing = 0;
+let placePos = [0, 0];
+let placeUserMove = [0, 0];
+let lastPlaceBlink = [0, 0, 0];
+let itemFalling = [];
+let cameraX = 0;
+let cameraY = 0;
+let followX = 0;
+let followY = 0;
+let follow = true;
+const input = {
+  up: false,
+  down: false,
+  left: false,
+  right: false,
+  jump: false,
+  hitJump: false,
+  grab: false,
+  hitGrab: false,
+  debugUp: false,
+  debugDown: false,
+  debugLeft: false,
+  debugRight: false,
+  debugSpace: false
+};
+
+ctx.fillStyle = '#222';
+ctx.fillRect(0, 0, cnv.width, cnv.height);
+
+const img = new Image();
+img.src = './gfx.png';
+
+function ilerp(a, b, t) {
+  return Math.round(a + (b - a) * t);
+}
+
+function redraw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillRect(0, 0, cnv.width, cnv.height);
+  const xi = Math.floor(-cameraX / 9);
+  const xf = Math.floor(-cameraX) - xi * 9;
+  const yi = Math.floor(-cameraY / 9);
+  const yf = Math.floor(-cameraY) - yi * 9;
+  for (let y = -1; y < 16; y++) {
+    const wy = y - yi;
+    for (let x = -1; x < 18; x++) {
+      const wx = x - xi;
+      const k = (
+        wx < 0 || wx >= worldWidth ||
+        wy < 0 || wy >= worldHeight
+      ) ? 65 : world[wx + wy * worldWidth];
+      const k1 = k & 0x7fff;
+      if (k1 > 0)
+        drawTile(k1, x * 9 + xf, y * 9 + yf);
+      const k2 = (k >> 15) & 0x7fff;
+      if (k2 > 0)
+        drawTile(k2, x * 9 + xf, y * 9 + yf);
+    }
+  }
+  if (grounded && grabItem && (
+    ((Date.now() - lastPlaceBlink[2]) % 1000) < 500 ||
+    lastPlaceBlink[0] !== groundedPos[0] ||
+    lastPlaceBlink[1] !== groundedPos[1]
+  )) {
+    lastPlaceBlink = [groundedPos[0], groundedPos[1],
+      lastPlaceBlink[0] !== groundedPos[0] || lastPlaceBlink[1] !== groundedPos[1]
+      ? Date.now()
+      : lastPlaceBlink[2]
+    ];
+    const x = Math.floor(-cameraX) + 0 + groundedPos[0] * 9;
+    const y = Math.floor(-cameraY) + 0.5 + groundedPos[1] * 9;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.strokeStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 9, y);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  if (!grabItem && grounded && pushed) {
+    const ax = Math.floor(userX / 9) + pushed;
+    const { item } = getForce(ax, Math.floor(userY / 9));
+    if (item > 0) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.strokeStyle = '#fff';
+      ctx.beginPath();
+      ctx.rect(
+        Math.floor(-cameraX) + Math.floor(userX / 9) * 9 + pushed * 9 + 1,
+        Math.floor(-cameraY) + Math.floor(userY / 9) * 9 + 1,
+        8,
+        8
+      );
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+  if (grabItem && itemFalling.length > 0) {
+    // draw falling items
+    const t = grabbing / grabFrames;
+    for (const item of itemFalling) {
+      const [ax, ay, it] = item;
+      drawTile(
+        it,
+        Math.floor(-cameraX) + ax * 9,
+        Math.floor(-cameraY) + ilerp(ay * 9, ay * 9 + 9, t)
+      );
+    }
+  }
+  drawTile(0,
+    Math.floor(userX) + Math.floor(-cameraX),
+    Math.floor(userY) + Math.floor(-cameraY)
+  );
+  if (grabItem) {
+    if (grabbing) {
+      const t = grabbing / grabFrames;
+      drawTile(
+        grabItem,
+        Math.floor(userX) + Math.floor(-cameraX) +
+          ilerp(grabDir * 9, 0, t),
+        Math.floor(userY) + Math.floor(-cameraY) +
+          ilerp(0, -9, t)
+      );
+    } else if (placing) {
+      const t = placing / placeFrames;
+      drawTile(
+        grabItem,
+        Math.floor(-cameraX) +
+          ilerp(Math.floor(userX), placePos[0] * 9, t),
+        Math.floor(-cameraY) +
+          ilerp(Math.floor(userY) - 9, placePos[1] * 9, t)
+      );
+    } else {
+      drawTile(
+        grabItem,
+        Math.floor(userX) + Math.floor(-cameraX),
+        Math.floor(userY) + Math.floor(-cameraY) - 9
+      );
+    }
+  }
+  if (!follow) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.strokeStyle = '#ff0';
+    ctx.beginPath();
+    ctx.rect(
+      Math.floor(followX - cameraX) - 0.5,
+      Math.floor(followY - cameraY) - 0.5,
+      161,
+      145
+    );
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function getForce(cx, cy) {
+  if (cx < 0 || cx >= worldWidth || cy < 0 || cy >= worldHeight)
+    return { fx: 0, fy: 0, solid: 1, item: 0 };
+  let fx = 0;
+  let fy = physicsGravity;
+  let solid = (world[cx + cy * worldWidth] >> 15) !== 0 ? 1 : 0;
+  let item = (world[cx + cy * worldWidth] >> 15) & 0x3fff;
+  // check falling items
+  for (const item2 of itemFalling) {
+    const [ax, ay, it] = item2;
+    if (cx === ax && (cy === ay || cy === ay + 1)) {
+      solid = 1;
+      item = it;
+    }
+  }
+  return { fx, fy, solid, item };
+}
+
+function overlaps(x, y) {
+  const cx = Math.floor(x / 9);
+  const cy = Math.floor(y / 9);
+  const cw = Math.ceil((x + 9) / 9);
+  const ch = Math.ceil((y + 9) / 9);
+  for (let iy = cy; iy < ch; iy++) {
+    for (let ix = cx; ix < cw; ix++) {
+      if (getForce(ix, iy).solid)
+        return true;
+    }
+  }
+  return false;
+}
+
+function start() {
+  function tick() {
+    if (input.debugUp   ){ follow = false; cameraY -= 2; }
+    if (input.debugDown ){ follow = false; cameraY += 2; }
+    if (input.debugLeft ){ follow = false; cameraX -= 2; }
+    if (input.debugRight){ follow = false; cameraX += 2; }
+    if (input.debugSpace){ follow = true;                  }
+
+    const cx = Math.floor((userX + 5) / 9);
+    const cy = Math.floor((userY + 5) / 9);
+
+    forceX = 0;
+    forceY = 0;
+
+    if (grabbing) {
+      grabbing++;
+      if (grabbing >= grabFrames) {
+        grabbing = 0;
+        // commit falling items
+        for (const item of itemFalling) {
+          const [ax, ay, it] = item;
+          const k = ax + (ay + 1) * worldWidth;
+          world[k] = (it << 15) | world[k];
+        }
+        itemFalling = [];
+      }
+    } else if (placing) {
+      placing++;
+      const t = placing / placeFrames;
+      userY = ilerp(placeUserMove[0], placeUserMove[1], t);
+      if (placing >= placeFrames) {
+        placing = 0;
+        const k = placePos[0] + placePos[1] * worldWidth;
+        world[k] = (grabItem << 15) | world[k];
+        grabItem = 0;
+      }
+    } else {
+      let h = input.left && !input.right ? -1 : input.right ? 1 : 0;
+      let v = input.up && !input.down ? -1 : input.down ? 1 : 0;
+      forceX += h * physicsMove;
+
+      if (!grabItem && input.hitGrab && grounded && pushed) {
+        const ax = Math.floor(userX / 9) + pushed;
+        const { item } = getForce(ax, Math.floor(userY / 9));
+        if (item > 0) {
+          const k = ax + cy * worldWidth;
+          world[k] = world[k] & 0xc0007fff;
+          // check for falling items
+          itemFalling = [];
+          for (let ay = cy - 1; ay >= 0; ay--) {
+            const { item } = getForce(ax, ay);
+            if (!item)
+              break;
+            const k = ax + ay * worldWidth;
+            world[k] = world[k] & 0xc0007fff;
+            itemFalling.push([ax, ay, item]);
+          }
+          forceX = 0;
+          forceY = 0;
+          velX = 0;
+          velY = 0;
+          userX = Math.floor(userX);
+          userY = Math.floor(userY);
+          grabbing = 1;
+          grabDir = pushed;
+          grabItem = item;
+          pushed = false;
+        }
+      } else if (grabItem && input.hitGrab && grounded) {
+        forceX = 0;
+        forceY = 0;
+        velX = 0;
+        velY = 0;
+        placing = 1;
+        placePos = [groundedPos[0], groundedPos[1] - 1];
+        placeUserMove = [userY, userY - 9];
+      } else if (input.hitJump && grounded) {
+        forceY += physicsJump;
+      }
+    }
+
+    const { fx, fy } = getForce(cx, cy);
+
+    velX += fx + forceX;
+    velY += fy + forceY;
+    velX *= grounded ? physicsGroundDrag : physicsAirDrag;
+    velY *= physicsGravityDrag;
+
+    // move user
+    let remainderX = userX % 1;
+    let currentSX = velX;
+    let remainderY = userY % 1;
+    let currentSY = velY;
+    let ox, oy, osx, osy;
+    let doneX = false;
+    let doneY = false;
+    grounded = false;
+
+    function stepX() {
+      // move player
+      if (currentSX > 0) {
+        // enough velocity to advance one pixel?
+        if (currentSX + remainderX >= 1) {
+          // advance one pixel
+          userX += (1 - remainderX);
+          userX = Math.floor(userX);
+          currentSX -= (1 - remainderX);
+          remainderX = 0;
+        } else {
+          // not enough velocity to advance one pixel, so just consume rest
+          userX += currentSX;
+          currentSX = 0;
+        }
+      } else if (currentSX < 0) {
+        // any remainder?
+        if (remainderX + currentSX < 0 && remainderX !== 0) {
+          // transfer remainder
+          currentSX += remainderX;
+          userX -= remainderX;
+          userX = Math.floor(userX);
+          remainderX = 1; // go left next iteration
+        } else {
+          // not enough velocity to advance one pixel, so just consume rest
+          userX += currentSX;
+          currentSX = 0;
+        }
+      }
+
+      // check for collision
+      if (
+        overlaps(userX, userY) ||
+        (grabItem ? overlaps(userX, userY - 9) : false)
+      ) {
+        // revert
+        userX = ox;
+        velX = 0;
+        currentSX = osx;
+        pushed = currentSX < 0 ? -1 : currentSX > 0 ? 1 : false;
+        doneX = true;
+      } else if (ox !== userX) {
+        pushed = false;
+      }
+    }
+
+    function stepY() {
+      // move player
+      if (currentSY > 0) {
+        // enough velocity to advance one pixel?
+        if (currentSY + remainderY >= 1) {
+          // advance one pixel
+          userY += (1 - remainderY);
+          userY = Math.floor(userY);
+          currentSY -= (1 - remainderY);
+          remainderY = 0;
+        } else {
+          // not enough velocity to advance one pixel, so just consume rest
+          userY += currentSY;
+          currentSY = 0;
+        }
+      } else if (currentSY < 0) {
+        // any remainder?
+        if (remainderY + currentSY < 0 && remainderY !== 0) {
+          // transfer remainder
+          currentSY += remainderY;
+          userY -= remainderY;
+          userY = Math.floor(userY);
+          remainderY = 1; // go left next iteration
+        } else {
+          // not enough velocity to advance one pixel, so just consume rest
+          userY += currentSY;
+          currentSY = 0;
+        }
+      }
+
+      // check for collision
+      const checkCollision = () =>
+        overlaps(userX, userY) ||
+        (grabItem ? overlaps(userX, userY - 9) : false)
+      let collision = checkCollision();
+      if (collision && osy < -0.5) {
+        // if we collided, then check if we are jumping up, and *near* a gap
+        const checkAgain = (ux) => {
+          if (Math.abs(ux) - userX > 2)
+            return false;
+          const old = userX;
+          userX = ux;
+          collision = checkCollision();
+          if (collision) {
+            userX = old;
+            return false;
+          }
+          return true;
+        };
+        checkAgain(Math.floor(userX)) ||
+        checkAgain(Math.floor(userX) - 1) ||
+        checkAgain(Math.floor(userX) + 1) ||
+        checkAgain(Math.floor(userX) - 2) ||
+        checkAgain(Math.floor(userX) + 2);
+      }
+
+      if (collision) {
+        // revert
+        userY = oy;
+        velY = 0;
+        currentSY = osy;
+        if (currentSY > 0) {
+          const tx = (userX + 5) / 9;
+          const ty = (userY + 5) / 9;
+          const ncx = Math.floor(tx);
+          const ncy = Math.floor(ty);
+          const { solid } = getForce(ncx, ncy + 1);
+          if (solid) {
+            grounded = true;
+            groundedPos = [ncx, ncy + 1];
+          } else {
+            grounded = false;
+            const cx = Math.floor(userX / 9);
+            const cy = Math.floor((userY + 1) / 9);
+            const cw = Math.ceil((userX + 9) / 9);
+            const ch = Math.ceil((userY + 1 + 9) / 9);
+            for (let iy = cy; iy < ch && !grounded; iy++) {
+              for (let ix = cx; ix < cw && !grounded; ix++) {
+                if (getForce(ix, iy).solid) {
+                  grounded = true;
+                  groundedPos = [ix, iy];
+                }
+              }
+            }
+          }
+        }
+        doneY = true;
+      }
+    }
+
+    while ((currentSX !== 0 && !doneX) || (currentSY !== 0 && !doneY)){
+      ox = userX;
+      oy = userY;
+      osx = currentSX;
+      osy = currentSY;
+      stepX();
+      stepY();
+    }
+
+    if (Math.abs(velX) < epsilon)
+      velX = 0;
+    if (Math.abs(velY) < epsilon)
+      velY = 0;
+    if (Math.abs(Math.floor(userX) - userX) < epsilon)
+      userX = Math.floor(userX);
+    if (Math.abs(Math.floor(userY) - userY) < epsilon)
+      userY = Math.floor(userY);
+    if (Math.abs(Math.floor(userX + 1) - userX) < epsilon)
+      userX = Math.floor(userX + 1);
+    if (Math.abs(Math.floor(userY + 1) - userY) < epsilon)
+      userY = Math.floor(userY + 1);
+
+    // move camera towards user
+    const targetX = userX - 75;
+    const targetY = userY - 95;
+    followX -= (followX - targetX) * cameraLag;
+    followY -= (followY - targetY) * cameraLag;
+    if (Math.abs(followX - targetX) < 0.1)
+      followX = targetX;
+    if (Math.abs(followY - targetY) < 0.1)
+      followY = targetY;
+    if (follow) {
+      cameraX = followX;
+      cameraY = followY;
+    }
+
+    redraw();
+  }
+
+  let frameCount = 0;
+  let nextFPS = Date.now() + 1000;
+  let nextFrame = Date.now();
+  function run() {
+    const now = Date.now();
+    let i = 0;
+    while (nextFrame < now) {
+      tick();
+      input.hitJump = false;
+      input.hitGrab = false;
+      frameCount++;
+      if (now >= nextFPS) {
+        fps.innerText = 'FPS: ' + frameCount;
+        frameCount = 0;
+        nextFPS = now + 1000;
+      }
+      nextFrame += 1000 / 60;
+      i++;
+      if (i >= 4) {
+        // too slow :-(
+        nextFrame = Date.now();
+      }
+    }
+    setTimeout(run, 0);
+  }
+  run();
+}
+
+function drawTile(d, x, y){
+  const flip = (d >> 12) & 7;
+  d = d & 0xfff;
+  const dx = (d & 63) * 9;
+  const dy = ((d >> 6) & 63) * 9;
+  switch (flip){
+    case 0:
+      ctx.setTransform(
+        1, 0,
+        0, 1,
+        x, y
+      );
+      break;
+    case 1:
+      ctx.setTransform(
+        0, 1,
+        1, 0,
+        x, y
+      );
+      break;
+    case 2:
+      ctx.setTransform(
+        1, 0,
+        0, -1,
+        x, y + 9
+      );
+      break;
+    case 3:
+      ctx.setTransform(
+        0, -1,
+        1, 0,
+        x, y + 9
+      );
+      break;
+    case 4:
+      ctx.setTransform(
+        -1, 0,
+        0, 1,
+        x + 9, y
+      );
+      break;
+    case 5:
+      ctx.setTransform(
+        0, 1,
+        -1, 0,
+        x + 9, y
+      );
+      break;
+    case 6:
+      ctx.setTransform(
+        -1, 0,
+        0, -1,
+        x + 9, y + 9
+      );
+      break;
+    case 7:
+      ctx.setTransform(
+        0, -1,
+        -1, 0,
+        x + 9, y + 9
+      );
+      break;
+  }
+  ctx.drawImage(img, dx, dy, 9, 9, 0, 0, 9, 9);
+}
+
+function onKey(key, down){
+  switch (key) {
+    case 'w': input.debugUp = down; return true;
+    case 's': input.debugDown = down; return true;
+    case 'a': input.debugLeft = down; return true;
+    case 'd': input.debugRight = down; return true;
+    case ' ': input.debugSpace = down; return true;
+    case 'ArrowUp': input.up = down; return true;
+    case 'ArrowDown': input.down = down; return true;
+    case 'ArrowLeft': input.left = down; return true;
+    case 'ArrowRight': input.right = down; return true;
+    case 'x':
+      if (down && !input.jump)
+        input.hitJump = true;
+      input.jump = down;
+      return true;
+    case 'z':
+      if (down && !input.jump)
+        input.hitGrab = true;
+      input.grab = down;
+      return true;
+  }
+  return false;
+}
+
+function onKeyDown(e){
+  if (onKey(e.key, true)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+}
+
+function onKeyUp(e){
+  if (onKey(e.key, false)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+  }
+}
+
+function onBlur(){
+  input.up = false;
+  input.down = false;
+  input.left = false;
+  input.right = false;
+  input.jump = false;
+  input.hitJump = false;
+  input.grab = false;
+  input.hitGrab = false;
+  input.debugUp = false;
+  input.debugDown = false;
+  input.debugLeft = false;
+  input.debugRight = false;
+  input.debugSpace = false;
+}
+
+window.addEventListener('keydown', onKeyDown);
+window.addEventListener('keyup', onKeyUp);
+window.addEventListener('blur', onBlur);
+
+// load everything
+Promise.all([
+  new Promise((resolve) => {
+    if (img.complete)
+      resolve();
+    else
+      img.onload = resolve;
+  }),
+  fetch('./world.json').then(
+    async (response) => {
+      const w = await response.json();
+
+      // calculate world offset
+      const rangeX = [0, 0];
+      const rangeY = [0, 0];
+      for (const layer of w.layers) {
+        rangeX[0] = Math.min(rangeX[0], layer.startx);
+        rangeX[1] = Math.max(rangeX[1], layer.startx + layer.width);
+        rangeY[0] = Math.min(rangeY[0], layer.starty);
+        rangeY[1] = Math.max(rangeY[1], layer.starty + layer.height);
+      }
+
+      worldWidth = rangeX[1] - rangeX[0];
+      worldHeight = rangeY[1] - rangeY[0];
+      for (let i = 0; i < worldWidth * worldHeight; i++)
+        world.push(0);
+
+      function loadLayer(name) {
+        const layer = w.layers.find(layer => layer.name === name);
+        if (!layer)
+          throw new Error('Missing layer: ' + name);
+        for (const chunk of layer.chunks) {
+          for (let y = 0; y < chunk.height; y++) {
+            for (let x = 0; x < chunk.width; x++) {
+              let d = chunk.data[x + y * chunk.width] - 1;
+              const flipH = (d & 0x80000000) !== 0;
+              const flipV = (d & 0x40000000) !== 0;
+              const flipR = (d & 0x20000000) !== 0;
+              d = d < 0 ? d : d & 0xfff;
+              d = d |
+                (flipH ? 0x4000 : 0) |
+                (flipV ? 0x2000 : 0) |
+                (flipR ? 0x1000 : 0);
+              const wx = chunk.x + x - rangeX[0];
+              const wy = chunk.y + y - rangeY[0];
+              const k = wx + wy * worldWidth;
+              if (name === 'objects' && d === 0) {
+                userX = wx * 9;
+                userY = wy * 9;
+              } else if (d > 0) {
+                if (name === 'objects') {
+                  world[k] = world[k] | (d << 15);
+                } else {
+                  world[k] = (name === 'solid' ? 0x40000000 : 0) | d;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      loadLayer('background');
+      loadLayer('solid');
+      loadLayer('objects');
+    }
+  )
+]).then(start);
+  </script>
+</body>
+</html>
