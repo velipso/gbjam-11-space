@@ -107,12 +107,14 @@ let forceX = 0;
 let forceY = 0;
 let velX = 0;
 let velY = 0;
+let userDead = 0;
 let grounded = false;
 let groundedPos = [0, 0];
 let grabItem = 0;
 let pushed = false;
 let grabbing = 0;
 let grabDir = 0;
+let grabSource = 0;
 let placing = 0;
 let placePos = [0, 0];
 let placeUserMove = [0, 0];
@@ -260,10 +262,12 @@ function redraw() {
   }
 
   // draw user
-  drawUser(0, false,
-    Math.floor(userX) + Math.floor(-cameraX),
-    Math.floor(userY) + Math.floor(-cameraY)
-  );
+  if (!userDead) {
+    drawUser(0, false,
+      Math.floor(userX) + Math.floor(-cameraX),
+      Math.floor(userY) + Math.floor(-cameraY)
+    );
+  }
 
   // draw particles
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -302,16 +306,19 @@ function redraw() {
 }
 
 function getForce(cx, cy) {
-  if (cx < 0 || cx >= worldWidth || cy < 0 || cy >= worldHeight)
-    return { fx: 0, fy: 0, solid: 1, item: 0 };
+  if (cx < 0 || cx >= worldWidth || cy >= worldHeight)
+    return { fx: 0, fy: 0, solid: 1, bg: 3136, item: 0 };
+  if (cy < 0)
+    return { fx: 0, fy: 0, solid: 1, bg: 65, item: 0 };
   const w = world[cx + cy * worldWidth];
   const bg = w & 0xfff;
   let solid = (w >> 15) !== 0 ? 1 : 0;
   let item = (w >> 15) & 0x3fff;
-  if (item < 10 && item !== 4) // don't let user grab TNT elements
+  if ((item < 10 && item !== 4) || (item >= 10 && item <= 20)) // don't let user grab TNT elements
     item = 0;
   let fx = 0;
-  let fy = physicsGravity[((w >> 10) & 3)] * itemWeight(grabItem);
+  const { add: itAdd, mul: itMul } = itemWeight(grabItem);
+  let fy = physicsGravity[((w >> 10) & 3)] * itMul + itAdd;
   // check falling items
   for (const item2 of itemFalling) {
     const [ax, ay, it] = item2;
@@ -324,11 +331,16 @@ function getForce(cx, cy) {
 }
 
 function itemWeight(item) {
-  if (item === 10)
-    return 2;
-  else if (item === 11)
-    return 0.5;
-  return 1;
+  if (item === 0 || item === 4)
+    return { add: 0, mul: 1 };
+  else if (item === 1024)
+    return { add: 0, mul: 2 };
+  else if (item === 1025)
+    return { add: 0, mul: 0.5 };
+  else if (item === 1026) // balloon
+    return { add: -0.45, mul: 1 };
+  console.log('unknown weight:', item);
+  return { add: 0, mul: 1 };
 }
 
 function explode(cx, cy, blink, blinkLeft) {
@@ -336,8 +348,9 @@ function explode(cx, cy, blink, blinkLeft) {
     return;
   const k = cx + cy * worldWidth;
   const item = (world[k] >> 15) & 0xfff;
-  if (item === 6 || item === 8) {
-    world[k] = (world[k] & 0xc0007fff) | ((item + 1) << 15);
+  if (item === 6 || item === 8 || (item >= 10 && item <= 20)) {
+    if (item < 10)
+      world[k] = (world[k] & 0xc0007fff) | ((item + 1) << 15);
     explosion.push({
       x: cx,
       y: cy,
@@ -362,13 +375,70 @@ function overlaps(x, y) {
   const cy = Math.floor(y / 9);
   const cw = Math.ceil((x + 9) / 9);
   const ch = Math.ceil((y + 9) / 9);
+  let collide = false;
+  let spike = false;
   for (let iy = cy; iy < ch; iy++) {
     for (let ix = cx; ix < cw; ix++) {
-      if (getForce(ix, iy).solid)
-        return true;
+      const { solid, bg } = getForce(ix, iy);
+      if (solid) {
+        collide = true;
+        if (bg === 65 || bg === 1089 || bg === 2113 || bg === 3137)
+          spike = true;
+      }
     }
   }
-  return false;
+  return { collide, spike };
+}
+
+function explodeItem() {
+  randomParticles(10, userX + 5, userY + 5 - 9, particleWhiteSparkle);
+  world[grabSource] = (world[grabSource] & 0xc0007fff) | (grabItem << 15);
+  grabItem = 0;
+}
+
+function explodeUser() {
+  randomParticles(10, userX + 5, userY + 5, particleWhiteSparkle);
+  userDead = 1;
+  forceX = 0;
+  forceY = 0;
+  velX = 0;
+  velY = 0;
+}
+
+function randomParticles(count, x, y, frames) {
+  for (let part = 0; part < count; part++) {
+    const ang = Math.random() * Math.PI * 2;
+    const mag = Math.random() * 0.8;
+    particles.push({
+      x,
+      y,
+      dx: Math.cos(ang) * mag,
+      dy: Math.sin(ang) * mag,
+      ddy: 0,
+      frame: Math.floor(Math.random() * 10),
+      frames
+    });
+  }
+}
+
+function restoreCheckpoint() {
+  for (let i = 0; i < origWorld.length; i++)
+    world[i] = origWorld[i];
+  // remove exploded cells
+  for (const k of exploded) {
+    const item = (world[k] >> 15) & 0xfff;
+    world[k] = world[k] & 0xc0007fff;
+  }
+  updateCheckpointTiles(checkpoint.x, checkpoint.y, 2);
+  userX = checkpoint.x * 9 + 5;
+  userY = checkpoint.y * 9 + 9;
+  userDead = 0;
+  grabItem = 0;
+  forceX = 0;
+  forceY = 0;
+  velX = 0;
+  velY = 0;
+  follow = 2;
 }
 
 function start() {
@@ -385,7 +455,11 @@ function start() {
     forceX = 0;
     forceY = 0;
 
-    if (grabbing) {
+    if (userDead) {
+      userDead++;
+      if (userDead >= 60)
+        restoreCheckpoint();
+    } else if (grabbing) {
       grabbing++;
       if (grabbing >= grabFrames) {
         grabbing = 0;
@@ -416,7 +490,7 @@ function start() {
       let v = input.up && !input.down ? -1 : input.down ? 1 : 0;
       forceX += h * physicsMove;
 
-      if (!grabItem && input.hitGrab && grounded && pushed && !overlaps(userX, userY - 9)) {
+      if (!grabItem && input.hitGrab && grounded && pushed && !overlaps(userX, userY - 9).collide) {
         const ax = Math.floor(userX / 9) + pushed;
         const { item } = getForce(ax, Math.floor(userY / 9));
         if (item > 0) {
@@ -441,6 +515,7 @@ function start() {
           grabbing = 1;
           grabDir = pushed;
           grabItem = item;
+          grabSource = k;
           pushed = false;
           if (grabItem === 4) {
             const k = ax + (cy + 1) * worldWidth;
@@ -460,21 +535,7 @@ function start() {
       } else if (input.hitJump && grounded) {
         forceY += physicsJump;
       } else if (input.hitReset) {
-        for (let i = 0; i < origWorld.length; i++)
-          world[i] = origWorld[i];
-        // remove exploded cells
-        for (const k of exploded) {
-          const item = (world[k] >> 15) & 0xfff;
-          world[k] = world[k] & 0xc0007fff;
-        }
-        updateCheckpointTiles(checkpoint.x, checkpoint.y, 2);
-        userX = checkpoint.x * 9 + 5;
-        userY = checkpoint.y * 9 + 9;
-        forceX = 0;
-        forceY = 0;
-        velX = 0;
-        velY = 0;
-        follow = 2;
+        restoreCheckpoint();
       }
     }
 
@@ -555,10 +616,13 @@ function start() {
       }
 
       // check for collision
-      if (
-        overlaps(userX, userY) ||
-        (grabItem ? overlaps(userX, userY - 9) : false)
-      ) {
+      const { collide: userCollide, spike: userSpike } = overlaps(userX, userY);
+      const { collide: itemCollide, spike: itemSpike } = overlaps(userX, userY - 9);
+      if (grabItem && itemSpike)
+        explodeItem();
+      if (userSpike)
+        explodeUser();
+      if (userCollide || (grabItem && itemCollide)) {
         // revert
         userX = ox;
         velX = 0;
@@ -601,9 +665,16 @@ function start() {
       }
 
       // check for collision
-      const checkCollision = () =>
-        overlaps(userX, userY) ||
-        (grabItem ? overlaps(userX, userY - 9) : false)
+      let userCollide, userSpike, itemCollide, itemSpike;
+      const checkCollision = () => {
+        const { collide: ucollide, spike: uspike } = overlaps(userX, userY);
+        const { collide: icollide, spike: ispike } = overlaps(userX, userY - 9);
+        userCollide = ucollide;
+        userSpike = uspike;
+        itemCollide = icollide;
+        itemSpike = ispike;
+        return ucollide || (grabItem && icollide);
+      }
       let collision = checkCollision();
       if (collision && osy < -0.5) {
         // if we collided, then check if we are jumping up, and *near* a gap
@@ -626,6 +697,10 @@ function start() {
         checkAgain(Math.floor(userX) + 2);
       }
 
+      if (grabItem && itemSpike)
+        explodeItem();
+      if (userSpike)
+        explodeUser();
       if (collision) {
         // revert
         userY = oy;
@@ -660,13 +735,15 @@ function start() {
       }
     }
 
-    while ((currentSX !== 0 && !doneX) || (currentSY !== 0 && !doneY)){
-      ox = userX;
-      oy = userY;
-      osx = currentSX;
-      osy = currentSY;
-      stepX();
-      stepY();
+    if (!userDead) {
+      while ((currentSX !== 0 && !doneX) || (currentSY !== 0 && !doneY)){
+        ox = userX;
+        oy = userY;
+        osx = currentSX;
+        osy = currentSY;
+        stepX();
+        stepY();
+      }
     }
 
     if (Math.abs(velX) < epsilon)
@@ -700,6 +777,12 @@ function start() {
       targetY -= 95;
       cameraLag = cameraLagExplosion;
     }
+    const cameraDist = Math.max(
+      Math.abs(followX - targetX),
+      Math.abs(followY - targetY)
+    );
+    if (cameraDist > 50) // if we're *really* far away, then make cameraLag fast
+      cameraLag *= 1 + ((cameraDist - 50) / 10);
     followX -= (followX - targetX) * cameraLag;
     followY -= (followY - targetY) * cameraLag;
     if (Math.abs(followX - targetX) < 0.1)
@@ -726,23 +809,13 @@ function start() {
           ex.blink = 30;
           const tile = (world[k] >> 15) & 0xfff;
           ex.state = 1 - ex.state;
-          world[k] = (world[k] & 0xc0007fff) | (
-            (tile + (ex.state === 0 ? -1 : 1)) << 15
-          );
-        } else {
-          for (let part = 0; part < 5; part++) {
-            const ang = Math.random() * Math.PI * 2;
-            const mag = Math.random() * 0.8;
-            particles.push({
-              x: ex.x * 9 + 5,
-              y: ex.y * 9 + 5,
-              dx: Math.cos(ang) * mag,
-              dy: Math.sin(ang) * mag,
-              ddy: 0,
-              frame: Math.floor(Math.random() * 10),
-              frames: particleWhiteSparkle,
-            });
+          if (tile < 10) {
+            world[k] = (world[k] & 0xc0007fff) | (
+              (tile + (ex.state === 0 ? -1 : 1)) << 15
+            );
           }
+        } else {
+          randomParticles(5, ex.x * 9 + 5, ex.y * 9 + 5, particleWhiteSparkle);
           world[k] = world[k] & 0xc0007fff;
           exploded.push(k);
           explode(ex.x - 1, ex.y, 10, 0);
