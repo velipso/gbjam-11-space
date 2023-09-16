@@ -67,7 +67,8 @@ a:hover, a:active {
     <p>Controls</p>
     <strong>Arrow Keys</strong> Move</br >
     <strong>Z</strong> Pick up / put down<br />
-    <strong>X</strong> Jump
+    <strong>X</strong> Jump<br />
+    <strong>Enter</strong> Try again
   </div>
   <p id="fps">FPS: ?</p>
   <p>
@@ -78,16 +79,26 @@ const fps = document.getElementById('fps');
 const cnv = document.getElementById('cnv');
 const ctx = cnv.getContext('2d');
 const world = [];
-const cameraLag = 0.11;
+const origWorld = [];
+const colors = ['#000000', '#333c38', '#5b6d65', '#5b6d65'];
+const cameraLagNormal = 0.11;
+const cameraLagExplosion = 0.04;
 const physicsAirDrag = 0.85;
 const physicsGroundDrag = 0.8;
 const physicsGravityDrag = 0.98;
 const physicsMove = 0.5;
-const physicsGravity = 0.3;
+const physicsGravity = [0.2, 0.27, 0.35, 0.5];
 const physicsJump = -6;
 const grabFrames = 10;
 const placeFrames = 6;
 const epsilon = 0.0001;
+const particleWhiteSparkle = [
+  9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+  10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+  11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+  390, 390, 390, 390, 392, 392, 392, 392, 390, 390, 390, 390, 392, 392, 392, 392,
+  390, 390, 390, 390, 390, 390, 390,
+];
 let worldWidth = 0;
 let worldHeight = 0;
 let userX = 0;
@@ -107,16 +118,22 @@ let placePos = [0, 0];
 let placeUserMove = [0, 0];
 let lastPlaceBlink = [0, 0, 0];
 let itemFalling = [];
+let explosion = [];
+let exploded = [];
+let particles = [];
 let cameraX = 0;
 let cameraY = 0;
 let followX = 0;
 let followY = 0;
-let follow = true;
+let follow = 2;
+let checkpoint = false;
 const input = {
   up: false,
   down: false,
   left: false,
   right: false,
+  reset: false,
+  hitReset: false,
   jump: false,
   hitJump: false,
   grab: false,
@@ -133,12 +150,15 @@ ctx.fillRect(0, 0, cnv.width, cnv.height);
 
 const img = new Image();
 img.src = './gfx.png';
+const userImg = new Image();
+userImg.src = './user.png';
 
 function ilerp(a, b, t) {
   return Math.round(a + (b - a) * t);
 }
 
 function redraw() {
+  const highlightColor = (Math.floor(Date.now() / 500) % 2) ? colors[2] : colors[3];
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillRect(0, 0, cnv.width, cnv.height);
   const xi = Math.floor(-cameraX / 9);
@@ -152,7 +172,7 @@ function redraw() {
       const k = (
         wx < 0 || wx >= worldWidth ||
         wy < 0 || wy >= worldHeight
-      ) ? 65 : world[wx + wy * worldWidth];
+      ) ? 64 : world[wx + wy * worldWidth];
       const k1 = k & 0x7fff;
       if (k1 > 0)
         drawTile(k1, x * 9 + xf, y * 9 + yf);
@@ -161,7 +181,7 @@ function redraw() {
         drawTile(k2, x * 9 + xf, y * 9 + yf);
     }
   }
-  if (grounded && grabItem && (
+  if (grounded && grabItem && !grabbing && (
     ((Date.now() - lastPlaceBlink[2]) % 1000) < 500 ||
     lastPlaceBlink[0] !== groundedPos[0] ||
     lastPlaceBlink[1] !== groundedPos[1]
@@ -174,7 +194,7 @@ function redraw() {
     const x = Math.floor(-cameraX) + 0 + groundedPos[0] * 9;
     const y = Math.floor(-cameraY) + 0.5 + groundedPos[1] * 9;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = highlightColor;
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.lineTo(x + 9, y);
@@ -186,7 +206,7 @@ function redraw() {
     const { item } = getForce(ax, Math.floor(userY / 9));
     if (item > 0) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.strokeStyle = '#fff';
+      ctx.strokeStyle = highlightColor;
       ctx.beginPath();
       ctx.rect(
         Math.floor(-cameraX) + Math.floor(userX / 9) * 9 + pushed * 9 + 1,
@@ -210,10 +230,7 @@ function redraw() {
       );
     }
   }
-  drawTile(0,
-    Math.floor(userX) + Math.floor(-cameraX),
-    Math.floor(userY) + Math.floor(-cameraY)
-  );
+
   if (grabItem) {
     if (grabbing) {
       const t = grabbing / grabFrames;
@@ -241,6 +258,34 @@ function redraw() {
       );
     }
   }
+
+  // draw user
+  drawUser(0, false,
+    Math.floor(userX) + Math.floor(-cameraX),
+    Math.floor(userY) + Math.floor(-cameraY)
+  );
+
+  // draw particles
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    p.x += p.dx;
+    p.y += p.dy;
+    p.dy += p.ddy;
+    const f = p.frames[p.frame++];
+    if (p.frame >= p.frames.length) {
+      particles.splice(i, 1);
+      i--;
+    }
+    const fx = (f % (64 * 3)) * 3;
+    const fy = Math.floor(f / (64 * 3)) * 3;
+    ctx.drawImage(img, fx, fy, 3, 3,
+      Math.floor(-cameraX) + Math.floor(p.x) - 1,
+      Math.floor(-cameraY) + Math.floor(p.y) - 1,
+      3, 3
+    );
+  }
+
   if (!follow) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.strokeStyle = '#ff0';
@@ -259,10 +304,14 @@ function redraw() {
 function getForce(cx, cy) {
   if (cx < 0 || cx >= worldWidth || cy < 0 || cy >= worldHeight)
     return { fx: 0, fy: 0, solid: 1, item: 0 };
+  const w = world[cx + cy * worldWidth];
+  const bg = w & 0xfff;
+  let solid = (w >> 15) !== 0 ? 1 : 0;
+  let item = (w >> 15) & 0x3fff;
+  if (item < 10 && item !== 4) // don't let user grab TNT elements
+    item = 0;
   let fx = 0;
-  let fy = physicsGravity;
-  let solid = (world[cx + cy * worldWidth] >> 15) !== 0 ? 1 : 0;
-  let item = (world[cx + cy * worldWidth] >> 15) & 0x3fff;
+  let fy = physicsGravity[((w >> 10) & 3)] * itemWeight(grabItem);
   // check falling items
   for (const item2 of itemFalling) {
     const [ax, ay, it] = item2;
@@ -271,7 +320,41 @@ function getForce(cx, cy) {
       item = it;
     }
   }
-  return { fx, fy, solid, item };
+  return { fx, fy, solid, bg, item };
+}
+
+function itemWeight(item) {
+  if (item === 10)
+    return 2;
+  else if (item === 11)
+    return 0.5;
+  return 1;
+}
+
+function explode(cx, cy, blink, blinkLeft) {
+  if (cx < 0 || cx >= worldWidth || cy < 0 || cy >= worldHeight)
+    return;
+  const k = cx + cy * worldWidth;
+  const item = (world[k] >> 15) & 0xfff;
+  if (item === 6 || item === 8) {
+    world[k] = (world[k] & 0xc0007fff) | ((item + 1) << 15);
+    explosion.push({
+      x: cx,
+      y: cy,
+      state: 1,
+      blink,
+      blinkLeft
+    });
+  }
+}
+
+function updateCheckpointTiles(x, y, d) {
+  const w = worldWidth;
+  const k = x + y * w;
+  world[k + 0 + 0] = (world[k + 0 + 0] & 0xfffff000) | ((world[k + 0 + 0] & 0xfff) + d);
+  world[k + 0 + 1] = (world[k + 0 + 1] & 0xfffff000) | ((world[k + 0 + 1] & 0xfff) + d);
+  world[k + w + 0] = (world[k + w + 0] & 0xfffff000) | ((world[k + w + 0] & 0xfff) + d);
+  world[k + w + 1] = (world[k + w + 1] & 0xfffff000) | ((world[k + w + 1] & 0xfff) + d);
 }
 
 function overlaps(x, y) {
@@ -290,11 +373,11 @@ function overlaps(x, y) {
 
 function start() {
   function tick() {
-    if (input.debugUp   ){ follow = false; cameraY -= 2; }
-    if (input.debugDown ){ follow = false; cameraY += 2; }
-    if (input.debugLeft ){ follow = false; cameraX -= 2; }
-    if (input.debugRight){ follow = false; cameraX += 2; }
-    if (input.debugSpace){ follow = true;                  }
+    if (input.debugUp   ){ follow = 0; cameraY -= 2; }
+    if (input.debugDown ){ follow = 0; cameraY += 2; }
+    if (input.debugLeft ){ follow = 0; cameraX -= 2; }
+    if (input.debugRight){ follow = 0; cameraX += 2; }
+    if (input.debugSpace){ follow = 2;               }
 
     const cx = Math.floor((userX + 5) / 9);
     const cy = Math.floor((userY + 5) / 9);
@@ -306,6 +389,8 @@ function start() {
       grabbing++;
       if (grabbing >= grabFrames) {
         grabbing = 0;
+        if (grabItem === 4) // automatically drop fuse
+          grabItem = 0;
         // commit falling items
         for (const item of itemFalling) {
           const [ax, ay, it] = item;
@@ -324,12 +409,14 @@ function start() {
         world[k] = (grabItem << 15) | world[k];
         grabItem = 0;
       }
+    } else if (explosion.length > 0) {
+      // do nothing
     } else {
       let h = input.left && !input.right ? -1 : input.right ? 1 : 0;
       let v = input.up && !input.down ? -1 : input.down ? 1 : 0;
       forceX += h * physicsMove;
 
-      if (!grabItem && input.hitGrab && grounded && pushed) {
+      if (!grabItem && input.hitGrab && grounded && pushed && !overlaps(userX, userY - 9)) {
         const ax = Math.floor(userX / 9) + pushed;
         const { item } = getForce(ax, Math.floor(userY / 9));
         if (item > 0) {
@@ -355,6 +442,12 @@ function start() {
           grabDir = pushed;
           grabItem = item;
           pushed = false;
+          if (grabItem === 4) {
+            const k = ax + (cy + 1) * worldWidth;
+            world[k] = (world[k] & 0xc0007fff) | (6 << 15);
+            explode(ax, cy + 1, 30, 5);
+            exploded.push(k - worldWidth); // remove fuse
+          }
         }
       } else if (grabItem && input.hitGrab && grounded) {
         forceX = 0;
@@ -366,15 +459,60 @@ function start() {
         placeUserMove = [userY, userY - 9];
       } else if (input.hitJump && grounded) {
         forceY += physicsJump;
+      } else if (input.hitReset) {
+        for (let i = 0; i < origWorld.length; i++)
+          world[i] = origWorld[i];
+        // remove exploded cells
+        for (const k of exploded) {
+          const item = (world[k] >> 15) & 0xfff;
+          world[k] = world[k] & 0xc0007fff;
+        }
+        updateCheckpointTiles(checkpoint.x, checkpoint.y, 2);
+        userX = checkpoint.x * 9 + 5;
+        userY = checkpoint.y * 9 + 9;
+        forceX = 0;
+        forceY = 0;
+        velX = 0;
+        velY = 0;
+        follow = 2;
       }
     }
 
-    const { fx, fy } = getForce(cx, cy);
-
+    const { fx, fy, bg } = getForce(cx, cy);
     velX += fx + forceX;
     velY += fy + forceY;
     velX *= grounded ? physicsGroundDrag : physicsAirDrag;
     velY *= physicsGravityDrag;
+
+    // check for checkpoint
+    let checkX = -1;
+    let checkY = -1;
+    if (bg === 128 || bg === 1024 + 128 || bg === 2048 + 128 || bg === 3072 + 128) {
+      checkX = cx;
+      checkY = cy;
+    } else if (bg === 129 || bg === 1024 + 129 || bg === 2048 + 129 || bg === 3072 + 129) {
+      checkX = cx - 1;
+      checkY = cy;
+    } else if (bg === 192 || bg === 1024 + 192 || bg === 2048 + 192 || bg === 3072 + 192) {
+      checkX = cx;
+      checkY = cy - 1;
+    } else if (bg === 193 || bg === 1024 + 193 || bg === 2048 + 193 || bg === 3072 + 193) {
+      checkX = cx - 1;
+      checkY = cy - 1;
+    }
+    if (checkX >= 0) {
+      // hit checkpoint
+      if (checkpoint === false || checkX !== checkpoint.x || checkY !== checkpoint.y) {
+        // remove last checkpoint
+        if (checkpoint)
+          updateCheckpointTiles(checkpoint.x, checkpoint.y, -2);
+        updateCheckpointTiles(checkX, checkY, 2);
+        checkpoint = {
+          x: checkX,
+          y: checkY,
+        };
+      }
+    }
 
     // move user
     let remainderX = userX % 1;
@@ -545,17 +683,76 @@ function start() {
       userY = Math.floor(userY + 1);
 
     // move camera towards user
-    const targetX = userX - 75;
-    const targetY = userY - 95;
+    let targetX = userX - 75;
+    let targetY = grounded ? userY - 95 : userY - 87;
+    let cameraLag = cameraLagNormal;
+    if (explosion.length > 0) {
+      // erm, actually target the center of the explosion
+      targetX = 0;
+      targetY = 0;
+      for (const ex of explosion) {
+        targetX += ex.x * 9 + 5;
+        targetY += ex.y * 9 + 5;
+      }
+      targetX /= explosion.length;
+      targetY /= explosion.length;
+      targetX -= 75;
+      targetY -= 95;
+      cameraLag = cameraLagExplosion;
+    }
     followX -= (followX - targetX) * cameraLag;
     followY -= (followY - targetY) * cameraLag;
     if (Math.abs(followX - targetX) < 0.1)
       followX = targetX;
     if (Math.abs(followY - targetY) < 0.1)
       followY = targetY;
-    if (follow) {
+    if (follow === 1) {
       cameraX = followX;
       cameraY = followY;
+    } else if (follow === 2) {
+      cameraX = followX = targetX;
+      cameraY = followY = targetY;
+      follow = 1;
+    }
+
+    // advance explosions
+    for (let i = 0; i < explosion.length; i++) {
+      const ex = explosion[i];
+      ex.blink--;
+      if (ex.blink <= 0) {
+        ex.blinkLeft--;
+        const k = ex.x + ex.y * worldWidth;
+        if (ex.blinkLeft > 0) {
+          ex.blink = 30;
+          const tile = (world[k] >> 15) & 0xfff;
+          ex.state = 1 - ex.state;
+          world[k] = (world[k] & 0xc0007fff) | (
+            (tile + (ex.state === 0 ? -1 : 1)) << 15
+          );
+        } else {
+          for (let part = 0; part < 5; part++) {
+            const ang = Math.random() * Math.PI * 2;
+            const mag = Math.random() * 0.8;
+            particles.push({
+              x: ex.x * 9 + 5,
+              y: ex.y * 9 + 5,
+              dx: Math.cos(ang) * mag,
+              dy: Math.sin(ang) * mag,
+              ddy: 0,
+              frame: Math.floor(Math.random() * 10),
+              frames: particleWhiteSparkle,
+            });
+          }
+          world[k] = world[k] & 0xc0007fff;
+          exploded.push(k);
+          explode(ex.x - 1, ex.y, 10, 0);
+          explode(ex.x + 1, ex.y, 10, 0);
+          explode(ex.x, ex.y - 1, 10, 0);
+          explode(ex.x, ex.y + 1, 10, 0);
+          explosion.splice(i, 1);
+          i--;
+        }
+      }
     }
 
     redraw();
@@ -569,6 +766,7 @@ function start() {
     let i = 0;
     while (nextFrame < now) {
       tick();
+      input.hitReset = false;
       input.hitJump = false;
       input.hitGrab = false;
       frameCount++;
@@ -655,6 +853,25 @@ function drawTile(d, x, y){
   ctx.drawImage(img, dx, dy, 9, 9, 0, 0, 9, 9);
 }
 
+function drawUser(d, flipH, x, y){
+  const dx = (d % 13) * 25;
+  const dy = Math.floor(d / 13) * 25;
+  if (flipH) {
+    ctx.setTransform(
+      -1, 0,
+      0, 1,
+      x + 25 - 8, y - 8
+    );
+  } else {
+    ctx.setTransform(
+      1, 0,
+      0, 1,
+      x - 8, y - 8
+    );
+  }
+  ctx.drawImage(userImg, dx, dy, 25, 25, 0, 0, 25, 25);
+}
+
 function onKey(key, down){
   switch (key) {
     case 'w': input.debugUp = down; return true;
@@ -666,6 +883,11 @@ function onKey(key, down){
     case 'ArrowDown': input.down = down; return true;
     case 'ArrowLeft': input.left = down; return true;
     case 'ArrowRight': input.right = down; return true;
+    case 'Enter':
+      if (down && !input.reset)
+        input.hitReset = true;
+      input.reset = down;
+      return true;
     case 'x':
       if (down && !input.jump)
         input.hitJump = true;
@@ -701,6 +923,8 @@ function onBlur(){
   input.down = false;
   input.left = false;
   input.right = false;
+  input.reset = false;
+  input.hitReset = false;
   input.jump = false;
   input.hitJump = false;
   input.grab = false;
@@ -723,6 +947,12 @@ Promise.all([
       resolve();
     else
       img.onload = resolve;
+  }),
+  new Promise((resolve) => {
+    if (userImg.complete)
+      resolve();
+    else
+      userImg.onload = resolve;
   }),
   fetch('./world.json').then(
     async (response) => {
@@ -755,17 +985,17 @@ Promise.all([
               const flipV = (d & 0x40000000) !== 0;
               const flipR = (d & 0x20000000) !== 0;
               d = d < 0 ? d : d & 0xfff;
-              d = d |
-                (flipH ? 0x4000 : 0) |
-                (flipV ? 0x2000 : 0) |
-                (flipR ? 0x1000 : 0);
               const wx = chunk.x + x - rangeX[0];
               const wy = chunk.y + y - rangeY[0];
               const k = wx + wy * worldWidth;
-              if (name === 'objects' && d === 0) {
+              if (name === 'objects' && d === 1) {
                 userX = wx * 9;
                 userY = wy * 9;
               } else if (d > 0) {
+                d = d |
+                  (flipH ? 0x4000 : 0) |
+                  (flipV ? 0x2000 : 0) |
+                  (flipR ? 0x1000 : 0);
                 if (name === 'objects') {
                   world[k] = world[k] | (d << 15);
                 } else {
@@ -780,6 +1010,8 @@ Promise.all([
       loadLayer('background');
       loadLayer('solid');
       loadLayer('objects');
+      for (const w of world)
+        origWorld.push(w);
     }
   )
 ]).then(start);
