@@ -367,6 +367,7 @@ function isPrizeDoors(item) {
 }
 
 function itemWeight(item) {
+  item = item & 0xfff;
   if (item === 0 || item === 4 || isPrize(item)) {
     return { add: 0, mul: 1 };
   } else if (item === 1024) // wood box
@@ -604,7 +605,7 @@ function start() {
           grabItem = item;
           grabSource = k;
           pushed = false;
-          if (grabItem === 4) {
+          if ((grabItem & 0xfff) === 4) {
             const k = ax + (cy + 1) * worldWidth;
             world[k] = (world[k] & maskNoItem) | (6 << 15);
             explode(ax, cy + 1, 30, 5);
