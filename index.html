@@ -88,7 +88,7 @@ const physicsGroundDrag = 0.8;
 const physicsGravityDrag = 0.98;
 const physicsLadderDrag = 0.7;
 const physicsMove = 0.5;
-const physicsGravity = [0.2, 0.27, 0.35, 0.5];
+const physicsGravity = [0.2, 0.2, 0.35, 0.35];
 const physicsJump = -6;
 const grabFrames = 10;
 const placeFrames = 6;
@@ -130,6 +130,7 @@ let exploded = [];
 let particles = [];
 let finalHome = [0, 0];
 let prizeDoors = [];
+let coinDoors = [];
 let beatGame = 0;
 let cameraX = 0;
 let cameraY = 0;
@@ -267,6 +268,14 @@ function redraw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(img, 36 + ((totalFrameCount >> 2) % 6) * 9, 18, 9, 9, x, y, 9, 9);
   }
+  if (grabItem && isPrize(grabItem) && !grabbing) {
+    const p = prizes.find(p => p.item === grabItem);
+    const x = Math.floor(-cameraX) + p.hx * 9;
+    const y = Math.floor(-cameraY) + (p.hy + 1) * 9;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(img, 36 + ((totalFrameCount >> 2) % 6) * 9, 18, 9, 9, x, y, 9, 9);
+  }
+
 
   // draw particles
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -334,7 +343,8 @@ function getForce(cx, cy) {
   if (
     (item < 10 && item !== 4) || // no TNT elements
     (item >= 10 && item <= 20) || // no fuses
-    isPrizeDoors(item) // no doors
+    isPrizeDoors(item) || // no doors
+    isCoinDoors(item)
   ) {
     item = 0; // prevent grabbing
   }
@@ -366,6 +376,10 @@ function isPrizeDoors(item) {
   return item === 2180 || item === 2244;
 }
 
+function isCoinDoors(item) {
+  return item === 2182 || item === 2183 || item === 2246 || item === 2247;
+}
+
 function itemWeight(item) {
   item = item & 0xfff;
   if (item === 0 || item === 4 || isPrize(item)) {
@@ -374,8 +388,8 @@ function itemWeight(item) {
     return { add: 0, mul: 2 };
   else if (item === 1025) // jetpack
     return { add: 0, mul: 0.5 };
-  else if (item === 1026)
-    return { add: -0.45, mul: 1 };
+  else if (item === 1026) // balloon
+    return { add: -0.25, mul: 1 };
   console.log('unknown weight:', item);
   return { add: 0, mul: 1 };
 }
@@ -454,7 +468,10 @@ function checkBeatGame() {
     if (!p.done)
       return;
   }
-  beatGame = 1;
+  const cx = Math.floor((userX + 5) / 9);
+  const cy = Math.floor((userY + 5) / 9);
+  if (cx === finalHome[0] && cy === finalHome[1])
+    beatGame = 1;
 }
 
 function randomParticles(count, x, y, frames) {
@@ -501,6 +518,27 @@ function restoreCheckpoint() {
   follow = 2;
 }
 
+function addCoin(){
+  coinCount++;
+  if (coinCount === 70){
+    for (const k of coinDoors){
+      world[k] = world[k] & maskNoItem;
+      exploded.push(k);
+    }
+  }
+}
+
+function checkCoin(cx, cy) {
+  const k = cx + cy * worldWidth;
+  if (cx >= 0 && cx < worldWidth && cy >= 0 && cy < worldHeight &&
+    ((world[k] >> 15) & 0xfff) === 26) {
+    // collected coin!
+    world[k] = world[k] & maskNoItem;
+    exploded.push(k);
+    addCoin();
+  }
+}
+
 function start() {
   function tick() {
     totalFrameCount++;
@@ -515,13 +553,14 @@ function start() {
 
     // check for coin collection
     {
-      const k = cx + cy * worldWidth;
-      if (cx >= 0 && cx < worldWidth && cy >= 0 && cy < worldHeight &&
-        ((world[k] >> 15) & 0xfff) === 26) {
-        // collected coin!
-        world[k] = world[k] & maskNoItem;
-        exploded.push(k);
-        coinCount++;
+      const cx = Math.floor(userX / 9);
+      const cy = Math.floor(userY / 9);
+      const cw = Math.ceil((userX + 9) / 9);
+      const ch = Math.ceil((userY + 9) / 9);
+      for (let iy = cy; iy < ch; iy++) {
+        for (let ix = cx; ix < cw; ix++) {
+          checkCoin(ix, iy);
+        }
       }
     }
 
@@ -568,6 +607,27 @@ function start() {
               world[k] = world[k] & maskNoItem;
               exploded.push(k);
             }
+          }
+          if (prizes.every(p => p.done)) {
+            // seal doors
+            for (const k of prizeDoors){
+              world[k] = origWorld[k];
+              while (true) {
+                const i = exploded.indexOf(k);
+                if (i < 0)
+                  break;
+                exploded.splice(i, 1);
+              }
+            }
+            // remove last checkpoint
+            if (checkpoint && !checkpoint.init)
+              updateCheckpointTiles(checkpoint.x, checkpoint.y, -2);
+            // set checkpoint inside ship
+            checkpoint = {
+              init: true,
+              x: Math.floor(userX / 9),
+              y: Math.floor(userY / 9) - 1,
+            };
           }
         }
         grabItem = 0;
@@ -1202,6 +1262,8 @@ Promise.all([
                   }
                 } else if (isPrizeDoors(d)) {
                   prizeDoors.push(k);
+                } else if (isCoinDoors(d)) {
+                  coinDoors.push(k);
                 } else if (d === 26) { // coin
                   totalCoinCount++;
                 } else {
