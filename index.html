@@ -33,7 +33,6 @@ a:hover, a:active {
   border-radius: 8px;
 }
 
-
 #controls {
   text-align: left;
   width: 275px;
@@ -60,6 +59,7 @@ a:hover, a:active {
   color: #3a3277;
 }
   </style>
+  <script src="./howler.core.min.js"></script>
 </head>
 <body>
   <canvas id="cnv" width="160" height="144"></canvas>
@@ -68,7 +68,21 @@ a:hover, a:active {
     <strong>Arrow Keys</strong> Move</br >
     <strong>Z</strong> Pick up / put down<br />
     <strong>X</strong> Jump<br />
-    <strong>Enter</strong> Try again
+    <strong>Enter</strong> Try again<Br />
+    <strong>Music</strong><select id="musicVol">
+      <option value="0">Off</option>
+      <option value="0.25">25%</option>
+      <option value="0.5" selected>50%</option>
+      <option value="0.75">75%</option>
+      <option value="1.00">100%</option>
+    </select>
+    <strong>Sfx</strong><select id="sfxVol">
+      <option value="0">Off</option>
+      <option value="0.25">25%</option>
+      <option value="0.5" selected>50%</option>
+      <option value="0.75">75%</option>
+      <option value="1.00">100%</option>
+    </select>
   </div>
   <p id="fps">FPS: ?</p>
   <p>
@@ -165,6 +179,28 @@ const img = new Image();
 img.src = './gfx.png';
 const userImg = new Image();
 userImg.src = './user.png';
+
+const musicVol = document.getElementById('musicVol');
+musicVol.selectedIndex = 2;
+const sfxVol = document.getElementById('sfxVol');
+sfxVol.selectedIndex = 2;
+
+const music = new Howl({
+  src: ['song.mp3'],
+  autoplay: true,
+  loop: true,
+  volume: 0.5,
+});
+
+musicVol.addEventListener('input', function(){
+  const v = parseFloat(this.options[this.selectedIndex].value);
+  music.volume(v);
+});
+
+sfxVol.addEventListener('input', function(){
+  const v = parseFloat(this.options[this.selectedIndex].value);
+  console.log('TODO: set sfx to', v);
+});
 
 function ilerp(a, b, t) {
   return Math.round(a + (b - a) * t);
