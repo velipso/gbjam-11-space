@@ -154,6 +154,7 @@ let follow = 2;
 let checkpoint = false;
 let prizes = [];
 let wasTargetingExplosions = 0;
+let lastWasGrounded = Date.now() * 2;
 const input = {
   up: false,
   down: false,
@@ -192,6 +193,77 @@ const music = new Howl({
   volume: 0.5,
 });
 
+const sfxBase = {
+  jumpFast: 0.75,
+  jumpSlow: 0.75,
+  pickup: 0.75,
+  lift: 0.75,
+  drop: 0.75,
+  explode: 1,
+  quietExplode: 0.5,
+  fuse: 0.15,
+  checkpoint: 0.75,
+  die: 0.75,
+  land: 1,
+  powerup: 0.75,
+  restore: 0.75,
+};
+
+const sfx = {
+  jumpFast: new Howl({
+    src: ['jump-fast.wav'],
+    volume: 0.5 * sfxBase.jumpFast
+  }),
+  jumpSlow: new Howl({
+    src: ['jump-slow.wav'],
+    volume: 0.5 * sfxBase.jumpSlow
+  }),
+  pickup: new Howl({
+    src: ['pickup.wav'],
+    volume: 0.5 * sfxBase.pickup
+  }),
+  lift: new Howl({
+    src: ['lift.wav'],
+    volume: 0.5 * sfxBase.lift
+  }),
+  drop: new Howl({
+    src: ['drop.wav'],
+    volume: 0.5 * sfxBase.drop
+  }),
+  explode: new Howl({
+    src: ['explode.wav'],
+    volume: 0.5 * sfxBase.explode
+  }),
+  quietExplode: new Howl({
+    src: ['explode.wav'],
+    volume: 0.5 * sfxBase.quietExplode
+  }),
+  fuse: new Howl({
+    src: ['fuse.wav'],
+    volume: 0.5 * sfxBase.fuse
+  }),
+  checkpoint: new Howl({
+    src: ['checkpoint.wav'],
+    volume: 0.5 * sfxBase.checkpoint
+  }),
+  die: new Howl({
+    src: ['die.wav'],
+    volume: 0.5 * sfxBase.die
+  }),
+  land: new Howl({
+    src: ['land.wav'],
+    volume: 0.5 * sfxBase.land
+  }),
+  powerup: new Howl({
+    src: ['powerup.wav'],
+    volume: 0.5 * sfxBase.powerup
+  }),
+  restore: new Howl({
+    src: ['restore.wav'],
+    volume: 0.5 * sfxBase.restore
+  }),
+};
+
 musicVol.addEventListener('input', function(){
   const v = parseFloat(this.options[this.selectedIndex].value);
   music.volume(v);
@@ -199,7 +271,10 @@ musicVol.addEventListener('input', function(){
 
 sfxVol.addEventListener('input', function(){
   const v = parseFloat(this.options[this.selectedIndex].value);
-  console.log('TODO: set sfx to', v);
+  const keys = Object.keys(sfx);
+  for (const k of keys) {
+    sfx[k].volume(sfxBase[k] * v);
+  }
 });
 
 function ilerp(a, b, t) {
@@ -365,10 +440,11 @@ function isLadder(bg) {
 
 function getForce(cx, cy) {
   if (cx < 0 || cx >= worldWidth || cy >= worldHeight)
-    return { fx: 0, fy: 0, solid: 1, bg: 3136, item: 0 };
+    return { fx: 0, fy: 0, solid: 1, bg: 3136, item: 0, grav: 0 };
   if (cy < 0)
-    return { fx: 0, fy: 0, solid: 1, bg: 65, item: 0 };
+    return { fx: 0, fy: 0, solid: 1, bg: 65, item: 0, grav: 0 };
   const w = world[cx + cy * worldWidth];
+  const grav = ((w >> 10) & 3);
   const bg = w & 0xfff;
   let solid = (w >> 15) !== 0 ? 1 : 0;
   let item = (w >> 15) & 0x3fff;
@@ -386,7 +462,7 @@ function getForce(cx, cy) {
   }
   let fx = 0;
   const { add: itAdd, mul: itMul } = itemWeight(grabItem);
-  let fy = physicsGravity[((w >> 10) & 3)] * itMul + itAdd;
+  let fy = physicsGravity[grav] * itMul + itAdd;
   if (isLadder(bg)) // ladder
     fy = 0;
   // check falling items
@@ -397,7 +473,7 @@ function getForce(cx, cy) {
       item = it;
     }
   }
-  return { fx, fy, solid, bg, item };
+  return { fx, fy, solid, bg, item, grav };
 }
 
 function isPrize(item) {
@@ -430,6 +506,8 @@ function itemWeight(item) {
   return { add: 0, mul: 1 };
 }
 
+let lastExplodePlay = 0;
+let lastFusePlay = 0;
 function explode(cx, cy, blink, blinkLeft) {
   if (cx < 0 || cx >= worldWidth || cy < 0 || cy >= worldHeight)
     return;
@@ -443,7 +521,25 @@ function explode(cx, cy, blink, blinkLeft) {
       y: cy,
       state: 1,
       blink,
-      blinkLeft
+      blinkLeft,
+      particleAmount: item === 6 || item === 8 ? 5 : 1,
+      play: function() {
+        const now = Date.now();
+        if (item === 6 || item === 8){
+          if (lastExplodePlay + 100 < now) {
+            if (lastExplodePlay + 300 < now)
+              sfx.explode.play();
+            else
+              sfx.quietExplode.play();
+            lastExplodePlay = now;
+          }
+        } else {
+          if (lastFusePlay + 100 < now) {
+            lastFusePlay = now;
+            sfx.fuse.play();
+          }
+        }
+      }
     });
   }
 }
@@ -483,12 +579,14 @@ function overlaps(x, y) {
 function explodeItem() {
   if (isPrize(grabItem)) // don't explode prizes lol
     return;
+  sfx.explode.play();
   randomParticles(10, userX + 5, userY + 5 - 9, particleWhiteSparkle);
   world[grabSource] = (world[grabSource] & maskNoItem) | (grabItem << 15);
   grabItem = 0;
 }
 
 function explodeUser() {
+  sfx.die.play();
   randomParticles(10, userX + 5, userY + 5, particleWhiteSparkle);
   userDead = 1;
   forceX = 0;
@@ -529,6 +627,7 @@ function randomParticles(count, x, y, frames) {
 function restoreCheckpoint() {
   if (!checkpoint)
     return;
+  sfx.restore.play();
   for (let i = 0; i < origWorld.length; i++)
     world[i] = origWorld[i];
   // remove exploded cells
@@ -555,6 +654,7 @@ function restoreCheckpoint() {
 }
 
 function addCoin(){
+  sfx.pickup.play();
   coinCount++;
   if (coinCount === 70){
     for (const k of coinDoors){
@@ -638,7 +738,8 @@ function start() {
           const p = prizes.find(p => p.item === grabItem);
           p.done = true;
           // placed prize!
-          if (p.item === 25) { // power
+          sfx.powerup.play();
+          if (p.item === 25) { // doors
             for (const k of prizeDoors){
               world[k] = world[k] & maskNoItem;
               exploded.push(k);
@@ -678,6 +779,7 @@ function start() {
         const ax = Math.floor(userX / 9) + pushed;
         const { item } = getForce(ax, Math.floor(userY / 9));
         if (item > 0) {
+          sfx.lift.play();
           const k = ax + cy * worldWidth;
           world[k] = world[k] & maskNoItem;
           // check for falling items
@@ -720,6 +822,7 @@ function start() {
           canPlace = !prizes.find(p => placePos[0] === p.hx && placePos[1] === p.hy);
         }
         if (canPlace) {
+          sfx.drop.play();
           forceX = 0;
           forceY = 0;
           velX = 0;
@@ -728,6 +831,11 @@ function start() {
           placeUserMove = [userY, userY - 9];
         }
       } else if (input.hitJump && grounded) {
+        const { grav } = getForce(cx, cy);
+        if (grav < 2)
+          sfx.jumpSlow.play();
+        else
+          sfx.jumpFast.play();
         forceY += physicsJump;
       } else if (input.hitReset) {
         restoreCheckpoint();
@@ -766,6 +874,7 @@ function start() {
         // remove last checkpoint
         if (checkpoint && !checkpoint.init)
           updateCheckpointTiles(checkpoint.x, checkpoint.y, -2);
+        sfx.checkpoint.play();
         updateCheckpointTiles(checkX, checkY, 2);
         checkpoint = {
           x: checkX,
@@ -782,6 +891,8 @@ function start() {
     let ox, oy, osx, osy;
     let doneX = false;
     let doneY = false;
+    if (grounded)
+      lastWasGrounded = Date.now();
     grounded = false;
 
     function stepX() {
@@ -951,6 +1062,9 @@ function start() {
       }
     }
 
+    if (grounded && Date.now() - lastWasGrounded > 250)
+      setTimeout(function(){ sfx.land.play(); }, 100);
+
     if (Math.abs(velX) < epsilon)
       velX = 0;
     if (Math.abs(velY) < epsilon)
@@ -1023,7 +1137,9 @@ function start() {
             );
           }
         } else {
-          randomParticles(5, ex.x * 9 + 5, ex.y * 9 + 5, particleWhiteSparkle);
+          ex.play();
+          randomParticles(ex.particleAmount,
+            ex.x * 9 + 5, ex.y * 9 + 5, particleWhiteSparkle);
           world[k] = world[k] & maskNoItem;
           exploded.push(k);
           explode(ex.x - 1, ex.y, 10, 0);
