@@ -45,12 +45,9 @@ a:hover, a:active {
 #controls > p {
   margin: 0 0 8px 0;
   padding: 0;
-  font-weight: bold;
-  text-decoration: underline;
-  text-align: center;
 }
 
-#controls > strong {
+#controls > p > strong {
   display: inline-block;
   width: 120px;
 }
@@ -64,25 +61,33 @@ a:hover, a:active {
 <body>
   <canvas id="cnv" width="160" height="144"></canvas>
   <div id="controls">
-    <p>Controls</p>
-    <strong>Arrow Keys</strong> Move</br >
-    <strong>Z</strong> Pick up / put down<br />
-    <strong>X</strong> Jump<br />
-    <strong>Enter</strong> Try again<Br />
-    <strong>Music</strong><select id="musicVol">
-      <option value="0">Off</option>
-      <option value="0.25">25%</option>
-      <option value="0.5" selected>50%</option>
-      <option value="0.75">75%</option>
-      <option value="1.00">100%</option>
-    </select>
-    <strong>Sfx</strong><select id="sfxVol">
-      <option value="0">Off</option>
-      <option value="0.25">25%</option>
-      <option value="0.5" selected>50%</option>
-      <option value="0.75">75%</option>
-      <option value="1.00">100%</option>
-    </select>
+    <p style="font-weight: bold; text-decoration: underline; text-align: center;">Controls</p>
+    <p>
+      <strong>Arrow Keys</strong> Move</br >
+      <strong>Z</strong> Pick up / put down<br />
+      <strong>X</strong> Jump<br />
+      <strong>Enter</strong> Try again
+    </p>
+    <p style="margin-top: 16px; border-top: 1px solid #6772a9; padding-top: 16px;">
+      <strong>Music</strong><select id="musicVol">
+        <option value="0">Off</option>
+        <option value="0.25">25%</option>
+        <option value="0.5" selected>50%</option>
+        <option value="0.75">75%</option>
+        <option value="1.00">100%</option>
+      </select>
+      <strong>Sfx</strong><select id="sfxVol">
+        <option value="0">Off</option>
+        <option value="0.25">25%</option>
+        <option value="0.5" selected>50%</option>
+        <option value="0.75">75%</option>
+        <option value="1.00">100%</option>
+      </select><br />
+      <strong>Gamepad</strong><select id="enableGamepad">
+        <option value="true">Enable</option>
+        <option value="false">Disable</option>
+      </select>
+    </p>
   </div>
   <p id="fps">FPS: ?</p>
   <p>
@@ -95,6 +100,7 @@ const ctx = cnv.getContext('2d');
 const world = [];
 const origWorld = [];
 const colors = ['#000000', '#3a3277', '#6772a9', '#ffffff'];
+let titleScreen = 1;
 const cameraLagNormal = 0.11;
 const cameraLagExplosion = 0.04;
 const physicsAirDrag = 0.85;
@@ -116,6 +122,12 @@ const particleWhiteSparkle = [
 ];
 const maskNoItem = 0xc0007fff;
 const maskNoBg = 0xfffff000;
+let userFrame = 14;
+let partnerFrame = 39;
+let partnerX = 0;
+let partnerY = 0;
+let tutorial = 1;
+let tutorialFrame = 0;
 let coinCount = 0;
 let totalCoinCount = 0;
 let totalFrameCount = 0;
@@ -166,11 +178,40 @@ const input = {
   hitJump: false,
   grab: false,
   hitGrab: false,
-  debugUp: false,
-  debugDown: false,
-  debugLeft: false,
-  debugRight: false,
-  debugSpace: false
+};
+const keyboard = {
+  up: false,
+  down: false,
+  left: false,
+  right: false,
+  reset: false,
+  hitReset: false,
+  jump: false,
+  hitJump: false,
+  grab: false,
+  hitGrab: false,
+};
+let enableGamepad = true;
+const gamepad = {
+  jump: false,
+  hitJump: false,
+  grab: false,
+  hitGrab: false,
+  reset: false,
+  hitReset: false,
+  up: false,
+  right: false,
+  down: false,
+  left: false,
+};
+const button = {
+  jump: 0,
+  grab: 1,
+  reset: 9,
+  up: 12,
+  right: 15,
+  down: 13,
+  left: 14
 };
 
 ctx.fillStyle = '#3a3277';
@@ -181,6 +222,11 @@ img.src = './gfx.png';
 const userImg = new Image();
 userImg.src = './user.png';
 
+const enableGamepadSel = document.getElementById('enableGamepad');
+enableGamepadSel.selectedIndex = 0;
+enableGamepadSel.addEventListener('input', function(){
+  enableGamepad = this.options[this.selectedIndex].value === 'true';
+});
 const musicVol = document.getElementById('musicVol');
 musicVol.selectedIndex = 2;
 const sfxVol = document.getElementById('sfxVol');
@@ -284,6 +330,11 @@ function ilerp(a, b, t) {
 function redraw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillRect(0, 0, cnv.width, cnv.height);
+  if (titleScreen) {
+    ctx.drawImage(img, 416, 18, 160, 144, 0, 0, 160, 144);
+    return;
+  }
+
   const coinFrame = Math.floor(totalFrameCount / 6) % 7;
   const xi = Math.floor(-cameraX / 9);
   const xf = Math.floor(-cameraX) - xi * 9;
@@ -351,10 +402,23 @@ function redraw() {
   }
 
   // draw user
-  if (!userDead) {
-    drawUser(0, false,
-      Math.floor(userX) + Math.floor(-cameraX),
-      Math.floor(userY) + Math.floor(-cameraY)
+  drawUser(userFrame, false,
+    Math.floor(userX) + Math.floor(-cameraX),
+    Math.floor(userY) + Math.floor(-cameraY)
+  );
+  // draw partner
+  drawUser(partnerFrame, false,
+    Math.floor(partnerX) + Math.floor(-cameraX),
+    Math.floor(partnerY) + Math.floor(-cameraY)
+  );
+  // draw hearts
+  if (partnerFrame === 51) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const f = (beatGame >> 2) % 10;
+    ctx.drawImage(userImg, f * 9, 100, 9, 25,
+      Math.floor(partnerX) + Math.floor(-cameraX) + 11,
+      Math.floor(partnerY) + Math.floor(-cameraY) - 4,
+      9, 25
     );
   }
 
@@ -387,7 +451,6 @@ function redraw() {
     ctx.drawImage(img, 36 + ((totalFrameCount >> 2) % 6) * 9, 18, 9, 9, x, y, 9, 9);
   }
 
-
   // draw particles
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   for (let i = 0; i < particles.length; i++) {
@@ -411,7 +474,10 @@ function redraw() {
 
   // draw coin count
   {
-    drawTile(26, 2, 2);
+    if (coinCount >= totalCoinCount)
+      drawTile(26 + coinFrame, 2, 2);
+    else
+      drawTile(26, 2, 2);
     const cstr = coinCount + '';
     for (let i = 0; i < cstr.length; i++) {
       const ch = cstr.charCodeAt(i) - 48;
@@ -419,18 +485,9 @@ function redraw() {
     }
   }
 
-  if (!follow) {
+  if (tutorial) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.strokeStyle = '#ff0';
-    ctx.beginPath();
-    ctx.rect(
-      Math.floor(followX - cameraX) - 0.5,
-      Math.floor(followY - cameraY) - 0.5,
-      161,
-      145
-    );
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    ctx.drawImage(img, 416, 162 + (tutorial - 1) * 27, 160, 27, 0, 18, 160, 27);
   }
 }
 
@@ -586,13 +643,10 @@ function explodeItem() {
 }
 
 function explodeUser() {
+  if (userDead)
+    return;
   sfx.die.play();
-  randomParticles(10, userX + 5, userY + 5, particleWhiteSparkle);
   userDead = 1;
-  forceX = 0;
-  forceY = 0;
-  velX = 0;
-  velY = 0;
 }
 
 function checkBeatGame() {
@@ -675,14 +729,49 @@ function checkCoin(cx, cy) {
   }
 }
 
+const btn = (gp, i) =>
+  gp && gp.buttons && gp.buttons.length > i && gp.buttons[i].pressed;
+
 function start() {
   function tick() {
+    const oldGamepad = {
+      jump: gamepad.jump,
+      grab: gamepad.grab,
+      reset: gamepad.reset,
+    };
+    gamepad.jump = false;
+    gamepad.grab = false;
+    gamepad.reset = false;
+    gamepad.up = false;
+    gamepad.down = false;
+    gamepad.left = false;
+    gamepad.right = false;
+    if (enableGamepad) {
+      for (const gp of navigator.getGamepads()){
+        if (btn(gp, button.jump )){ gamepad.jump  = true; gamepad.hitJump = !oldGamepad.jump; }
+        if (btn(gp, button.grab )){ gamepad.grab  = true; gamepad.hitGrab = !oldGamepad.grab; }
+        if (btn(gp, button.reset)){ gamepad.reset = true; gamepad.hitReset = !oldGamepad.reset; }
+        if (btn(gp, button.up   )) gamepad.up    = true;
+        if (btn(gp, button.right)) gamepad.right = true;
+        if (btn(gp, button.down )) gamepad.down  = true;
+        if (btn(gp, button.left )) gamepad.left  = true;
+      }
+    } else {
+      gamepad.hitJump = false;
+      gamepad.hitGrab = false;
+      gamepad.hitReset = false;
+    }
+    for (const k of ['jump', 'hitJump', 'grab', 'hitGrab', 'reset', 'hitReset', 'up', 'down', 'left', 'right'])
+      input[k] = keyboard[k] || gamepad[k];
+
+    if (titleScreen){
+      redraw();
+      if (input.hitReset) {
+        titleScreen = 0;
+      }
+      return;
+    }
     totalFrameCount++;
-    if (input.debugUp   ){ follow = 0; cameraY -= 2; }
-    if (input.debugDown ){ follow = 0; cameraY += 2; }
-    if (input.debugLeft ){ follow = 0; cameraX -= 2; }
-    if (input.debugRight){ follow = 0; cameraX += 2; }
-    if (input.debugSpace){ follow = 2;               }
 
     const cx = Math.floor((userX + 5) / 9);
     const cy = Math.floor((userY + 5) / 9);
@@ -704,16 +793,64 @@ function start() {
     forceY = 0;
     let v = 0;
     let h = 0;
+    userFrame = 14;
+
+    if (tutorial === 4) {
+      tutorialFrame++;
+      if (tutorialFrame >= 8 * 60) {
+        tutorialFrame = 0;
+        tutorial++;
+      }
+    } else if (tutorial === 7) {
+      tutorialFrame++;
+      if (tutorialFrame >= 8 * 60) {
+        tutorialFrame = 0;
+        tutorial = 0;
+      }
+    }
 
     if (userDead) {
+      if (userDead < 45)
+        userFrame = 3;
+      else{
+       if (userDead === 45) {
+          randomParticles(10, userX + 5, userY + 5, particleWhiteSparkle);
+          sfx.explode.play();
+        }
+        userFrame = 4;
+      }
       userDead++;
-      if (userDead >= 60)
+      if (userDead >= 90)
         restoreCheckpoint();
     } else if (beatGame) {
       beatGame++;
-      // TODO: something cool
+      if (beatGame < 180) {
+        tutorial = 8;
+      } else if (beatGame < 540) {
+        tutorial = 9;
+      } else {
+        tutorial = beatGame < 800 ? 0 : 10;
+        userFrame = 13;
+        if (beatGame < 700)
+          partnerFrame = ilerp(39, 51, (beatGame - 540) / (700 - 540));
+        else
+          partnerFrame = 51;
+      }
+    } else if (tutorial === 1) {
+      tutorialFrame++;
+      if (tutorialFrame >= 7 * 60) {
+        tutorialFrame = 0;
+        tutorial++;
+      }
+    } else if (tutorial === 2) {
+      tutorialFrame++;
+      if (tutorialFrame >= 7 * 60) {
+        tutorialFrame = 0;
+        tutorial++;
+      }
     } else if (grabbing) {
       grabbing++;
+      userFrame = 14 + grabDir;
       if (grabbing >= grabFrames) {
         grabbing = 0;
         if (grabItem === 4) // automatically drop fuse
@@ -740,6 +877,8 @@ function start() {
           // placed prize!
           sfx.powerup.play();
           if (p.item === 25) { // doors
+            tutorial = 7;
+            tutorialFrame = 0;
             for (const k of prizeDoors){
               world[k] = world[k] & maskNoItem;
               exploded.push(k);
@@ -773,12 +912,17 @@ function start() {
       // do nothing
     } else {
       h = input.left && !input.right ? -1 : input.right ? 1 : 0;
+      if (tutorial === 4 && tutorialFrame < 10)
+        h = 1;
       v = input.up && !input.down ? -1 : input.down ? 1 : 0;
+      userFrame = -1;
 
       if (!grabItem && input.hitGrab && grounded && pushed && !overlaps(userX, userY - 9).collide) {
         const ax = Math.floor(userX / 9) + pushed;
         const { item } = getForce(ax, Math.floor(userY / 9));
         if (item > 0) {
+          if (tutorial === 4 || tutorial === 5)
+            tutorial = 6;
           sfx.lift.play();
           const k = ax + cy * worldWidth;
           world[k] = world[k] & maskNoItem;
@@ -831,6 +975,8 @@ function start() {
           placeUserMove = [userY, userY - 9];
         }
       } else if (input.hitJump && grounded) {
+        if (tutorial === 3)
+          tutorial = 4;
         const { grav } = getForce(cx, cy);
         if (grav < 2)
           sfx.jumpSlow.play();
@@ -851,6 +997,14 @@ function start() {
     velX *= isLadder(bg) ? physicsLadderDrag :
       grounded ? physicsGroundDrag : physicsAirDrag;
     velY *= isLadder(bg) ? physicsLadderDrag : physicsGravityDrag;
+
+    if (userFrame < 0) {
+      // set frame based on physics
+      const eps = 0.25;
+      userFrame = 14 +
+        (velX < -eps ? -1 : velX > eps ? 1 : 0) +
+        (grounded ? 0 : velY < -eps ? -13 : velY > eps ? 13 : 0);
+    }
 
     // check for checkpoint
     let checkX = -1;
@@ -1051,7 +1205,7 @@ function start() {
       }
     }
 
-    if (!userDead) {
+    if (userDead < 45) {
       while ((currentSX !== 0 && !doneX) || (currentSY !== 0 && !doneY)){
         ox = userX;
         oy = userY;
@@ -1079,9 +1233,9 @@ function start() {
       userY = Math.floor(userY + 1);
 
     // move camera towards user
-    let targetX = userX - 75;
+    let targetX = beatGame > 560 ? userX - 88 : userX - 75;
     let targetY = grounded ? userY - 95 : userY - 87;
-    let cameraLag = cameraLagNormal;
+    let cameraLag = (beatGame > 560 ? 0.3 : 1) * cameraLagNormal;
     if (explosion.length > 0) {
       // erm, actually target the center of the explosion
       targetX = 0;
@@ -1163,9 +1317,9 @@ function start() {
     let i = 0;
     while (nextFrame < now) {
       tick();
-      input.hitReset = false;
-      input.hitJump = false;
-      input.hitGrab = false;
+      keyboard.hitReset = false;
+      keyboard.hitJump = false;
+      keyboard.hitGrab = false;
       frameCount++;
       if (now >= nextFPS) {
         fps.innerText = 'FPS: ' + frameCount;
@@ -1271,29 +1425,24 @@ function drawUser(d, flipH, x, y){
 
 function onKey(key, down){
   switch (key) {
-    case 'w': input.debugUp = down; return true;
-    case 's': input.debugDown = down; return true;
-    case 'a': input.debugLeft = down; return true;
-    case 'd': input.debugRight = down; return true;
-    case ' ': input.debugSpace = down; return true;
-    case 'ArrowUp': input.up = down; return true;
-    case 'ArrowDown': input.down = down; return true;
-    case 'ArrowLeft': input.left = down; return true;
-    case 'ArrowRight': input.right = down; return true;
+    case 'ArrowUp': keyboard.up = down; return true;
+    case 'ArrowDown': keyboard.down = down; return true;
+    case 'ArrowLeft': keyboard.left = down; return true;
+    case 'ArrowRight': keyboard.right = down; return true;
     case 'Enter':
-      if (down && !input.reset)
-        input.hitReset = true;
-      input.reset = down;
+      if (down && !keyboard.reset)
+        keyboard.hitReset = true;
+      keyboard.reset = down;
       return true;
     case 'x':
-      if (down && !input.jump)
-        input.hitJump = true;
-      input.jump = down;
+      if (down && !keyboard.jump)
+        keyboard.hitJump = true;
+      keyboard.jump = down;
       return true;
     case 'z':
-      if (down && !input.jump)
-        input.hitGrab = true;
-      input.grab = down;
+      if (down && !keyboard.jump)
+        keyboard.hitGrab = true;
+      keyboard.grab = down;
       return true;
   }
   return false;
@@ -1316,21 +1465,16 @@ function onKeyUp(e){
 }
 
 function onBlur(){
-  input.up = false;
-  input.down = false;
-  input.left = false;
-  input.right = false;
-  input.reset = false;
-  input.hitReset = false;
-  input.jump = false;
-  input.hitJump = false;
-  input.grab = false;
-  input.hitGrab = false;
-  input.debugUp = false;
-  input.debugDown = false;
-  input.debugLeft = false;
-  input.debugRight = false;
-  input.debugSpace = false;
+  keyboard.up = false;
+  keyboard.down = false;
+  keyboard.left = false;
+  keyboard.right = false;
+  keyboard.reset = false;
+  keyboard.hitReset = false;
+  keyboard.jump = false;
+  keyboard.hitJump = false;
+  keyboard.grab = false;
+  keyboard.hitGrab = false;
 }
 
 window.addEventListener('keydown', onKeyDown);
@@ -1394,6 +1538,9 @@ Promise.all([
                   y: wy,
                   init: true
                 }
+              } else if (name === 'objects' && d === 43) {
+                partnerX = wx * 9 + 12;
+                partnerY = wy * 9 + 8;
               } else if (name === 'objects' && isPrize(d)) {
                 const p = prizes.findIndex(p => p.item === d);
                 if (p < 0)
