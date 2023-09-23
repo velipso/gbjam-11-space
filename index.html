@@ -122,6 +122,12 @@ const particleWhiteSparkle = [
 ];
 const maskNoItem = 0xc0007fff;
 const maskNoBg = 0xfffff000;
+const totalTime = {
+  startNow: 0,
+  startFrames: 0,
+  endNow: 0,
+  endFrames: 0
+};
 let userFrame = 14;
 let partnerFrame = 39;
 let partnerX = 0;
@@ -658,8 +664,11 @@ function checkBeatGame() {
   }
   const cx = Math.floor((userX + 5) / 9);
   const cy = Math.floor((userY + 5) / 9);
-  if (cx === finalHome[0] && cy === finalHome[1])
+  if (cx === finalHome[0] && cy === finalHome[1]) {
     beatGame = 1;
+    totalTime.endNow = Date.now();
+    totalTime.endFrames = totalFrameCount;
+  }
 }
 
 function randomParticles(count, x, y, frames) {
@@ -768,6 +777,8 @@ function start() {
       redraw();
       if (input.hitReset) {
         titleScreen = 0;
+        totalTime.startNow = Date.now();
+        totalTime.startFrames = totalFrameCount;
       }
       return;
     }
@@ -1322,9 +1333,16 @@ function start() {
       keyboard.hitGrab = false;
       frameCount++;
       if (now >= nextFPS) {
-        fps.innerText = 'FPS: ' + frameCount;
-        frameCount = 0;
-        nextFPS = now + 1000;
+        if (beatGame) {
+          fps.innerText =
+            (totalTime.endNow - totalTime.startNow) + ' ms // ' +
+            (totalTime.endFrames - totalTime.startFrames) + ' frames';
+          nextFPS = now + 1000000;
+        } else {
+          fps.innerText = 'FPS: ' + frameCount;
+          frameCount = 0;
+          nextFPS = now + 1000;
+        }
       }
       nextFrame += 1000 / 60;
       i++;
